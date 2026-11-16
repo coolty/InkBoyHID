@@ -8,7 +8,8 @@ typedef struct { uint8_t x, y, width, height; } game_view_t;
 #define GAME_VIEW_CLASSIC ((game_view_t){20, 28, 160, 144})
 /* 1.25x nearest neighbour: every fourth source pixel and row is doubled. */
 #define GAME_VIEW_FILL ((game_view_t){0, 10, 200, 180})
-#define GAME_VIEW_MAX_BYTES (200 * 180 / 4)
+/* Big enough for any view, rotated or not: the whole panel at two bits per pixel. */
+#define GAME_VIEW_MAX_BYTES (200 * 200 / 4)
 
 /* A zeroed view means the classic 160x144 viewport. */
 static inline game_view_t game_view_or_classic(game_view_t v) { return v.width ? v : GAME_VIEW_CLASSIC; }

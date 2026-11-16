@@ -12,6 +12,8 @@ CODE = r'''
 #include "host_fakes.h"
 static unsigned fulls, updates, prompts, cancel_step, console_requests;
 static bool raw_pending;
+static unsigned wait_messages;
+static int inject_pin = -1;
 static void sample(int pin, int level, int64_t delay) {
     host_gpio_level[pin]=level; host_clock_us+=delay; input_sample_hardware();
 }
@@ -29,16 +31,22 @@ static void hold(unsigned pin, unsigned expected) {
     sample(pin,0,1); assert(input_hardware_event()==expected);
     sample(pin,0,1000000); sample(pin,1,1); sample(pin,1,30000); assert(!input_hardware_event());
 }
-uint8_t controller_raw(void) {
+uint32_t controller_raw(void) {
     if (!raw_pending) return 0;
     raw_pending=false; return (uint8_t)(1u<<(prompts-1));
 }
-bool controller_connected(void) { return true; }
+static bool pad_connected = true;
+bool controller_connected(void) { return pad_connected; }
+controller_profile_t controller_profile(void) { return CONTROLLER_PROFILE_INKBOY; }
 uint32_t controller_reports(void) { return 0; }
 esp_err_t controller_toggle_usb(void) { ++console_requests; return ESP_OK; }
 controller_transport_t controller_transport(void) { return CONTROLLER_BLUETOOTH; }
 void screen_draw_message(uint8_t *p,const char *title,const char *a,const char *b,const char *c) {
     (void)p;(void)a;(void)b;(void)c;
+    if (!strcmp(title,"ON / CONNECT")) {
+        ++wait_messages;
+        if (inject_pin >= 0) { sample(inject_pin,0,1); sample(inject_pin,0,30000); sample(inject_pin,0,700000); } /* A hold. */
+    }
     if (!strncmp(title,"PRESS ",6)) {
         ++prompts; raw_pending=true;
         if(prompts==cancel_step) { hold(18,INPUT_BACK); hold(18,INPUT_BACK); /* consumed checks; queue one final Back */
@@ -54,6 +62,7 @@ unsigned fast_display_pending(ssd1681_handle_t d) { (void)d;return 0; }
 unsigned fast_display_gray_last_scans(void) { return 1; }
 void fast_display_wait_slot(ssd1681_handle_t d,int64_t deadline) { (void)d;(void)deadline; }
 esp_err_t fast_display_set_dither_pulses(unsigned b,unsigned w) { (void)b;(void)w;return ESP_OK; }
+void fast_display_set_rotation(screen_rotation_t r) { (void)r; }
 esp_err_t fast_display_full(ssd1681_handle_t d,const uint8_t *p,display_mode_t mode) { (void)d;(void)p;(void)mode; ++fulls; return ESP_OK; }
 esp_err_t fast_display_update(ssd1681_handle_t d,const uint8_t *p) { (void)d;(void)p; ++updates; return ESP_OK; }
 int main(int argc,char **argv) {
@@ -72,6 +81,17 @@ int main(int argc,char **argv) {
         sample(0,1,1);sample(18,1,1);sample(0,1,30000);assert(!input_hardware_event());
         host_gpio_level[0]=0;assert(input_start_hardware_watch()==ESP_OK);
         sample(0,1,1000000);sample(0,1,30000);assert(!input_hardware_event());
+    } else if(!strcmp(argv[1],"bypass")) {
+        pad_connected=false; inject_pin=0;           /* A long press of BOOT plays without a controller. */
+        assert(input_wait_controller_or_bypass() && input_bypassed() && input_connected() && wait_messages==1);
+        sample(0,1,1); sample(0,1,30000); input_clear_events();
+        assert(input_wait_controller_or_bypass() && wait_messages==1); /* Chosen once per game start. */
+        input_set_bypass(false); assert(!input_connected() && !input_bypassed());
+        inject_pin=18;                               /* A long press of PWR still returns to the menu. */
+        assert(!input_wait_controller_or_bypass() && !input_bypassed() && wait_messages==2);
+        sample(18,1,1); sample(18,1,30000); input_clear_events();
+        inject_pin=-1; pad_connected=true; input_set_bypass(true);     /* A connected controller wins. */
+        assert(input_wait_controller_or_bypass() && !input_bypassed() && wait_messages==2);
     } else if(!strcmp(argv[1],"console")) {
         sample(0,0,1);sample(18,0,1);sample(0,0,30000);
         sample(18,0,2000000);assert(input_hardware_event()==INPUT_PC && console_requests==1);
@@ -99,5 +119,5 @@ int main(int argc,char **argv) {
     return 0;
 }
 '''
-run(CODE, modules=['input.c','screen.c','display_config.c'], scenarios=[[x] for x in ['gestures','console','console_continuous','map','cancel','failure']])
+run(CODE, modules=['input.c','screen.c','display_config.c'], scenarios=[[x] for x in ['gestures','console','console_continuous','map','cancel','failure','bypass']])
 print('PASS: debounce, two-button short/hold actions, immediate gameplay events, chords/held wake, partial mapping and cancellation/save failure')

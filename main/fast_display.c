@@ -82,6 +82,46 @@ esp_err_t fast_display_set_gray_adaptive(const gray_adaptive_t *config) {
     gray_adaptive=*config;gray_attach_policy();
     return ESP_OK;
 }
+/* Screen rotation. Everything above this file draws upright; the panel, the dithered counters and the
+ * grayscale planner work in panel coordinates, so frames and the game image are turned here, once, on the
+ * way in. The setting is taken at fast_display_full. The extra buffers exist only while rotated. */
+static screen_rotation_t rotation, active_rotation;
+static uint8_t *rotated_frame, *rotated_game;
+
+void fast_display_set_rotation(screen_rotation_t value)
+{
+    rotation = value < SCREEN_ROTATE_COUNT ? value : SCREEN_ROTATE_0;
+}
+
+static esp_err_t rotation_resources(void)
+{
+    active_rotation = rotation;
+    if (active_rotation == SCREEN_ROTATE_0) {
+        heap_caps_free(rotated_frame); heap_caps_free(rotated_game);
+        rotated_frame = rotated_game = NULL;
+        return ESP_OK;
+    }
+    if (!rotated_frame) rotated_frame = heap_caps_malloc(SSD1681_FRAME_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!rotated_game) rotated_game = heap_caps_malloc(SCREEN_ROTATE_GAME_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!rotated_frame || !rotated_game) { active_rotation = SCREEN_ROTATE_0; return ESP_ERR_NO_MEM; }
+    return ESP_OK;
+}
+
+static const uint8_t *oriented(const uint8_t *frame)
+{
+    if (active_rotation == SCREEN_ROTATE_0) return frame;
+    screen_rotate_panel(active_rotation, frame, rotated_frame);
+    return rotated_frame;
+}
+
+/* The game image for the planner, turned with its view when rotated. */
+static const uint8_t *gray_oriented_game(void)
+{
+    if (!gray_game || !gray_plan || active_rotation == SCREEN_ROTATE_0) return gray_game;
+    gray_plan->view = screen_rotate_game(active_rotation, gray_game, game_view_or_classic(gray_view), rotated_game);
+    return rotated_game;
+}
+
 static DMA_ATTR uint8_t gray_follow_black[SSD1681_FRAME_BYTES], gray_follow_white[SSD1681_FRAME_BYTES];
 esp_err_t fast_display_set_gray_holds(unsigned mask)
 {
@@ -169,6 +209,9 @@ esp_err_t fast_display_full(ssd1681_handle_t d, const uint8_t *frame, display_mo
 {
     if (!d || !frame || mode >= DISPLAY_MODE_COUNT) return ESP_ERR_INVALID_ARG;
     owner = NULL; prepared = false;
+    esp_err_t turned = rotation_resources();
+    if (turned) return turned;
+    frame = oriented(frame);
     const bool gray = mode == DISPLAY_GRAYSCALE;
     if (gray) {
         esp_err_t reserve=gray_resources(gray_adaptive.history_mode,gray_adaptive.weak_wl);
@@ -235,7 +278,7 @@ esp_err_t fast_display_full(ssd1681_handle_t d, const uint8_t *frame, display_mo
         gray_plan->view = gray_view;
         gray_attach_policy();
         gray_plan_parallel_seed(gray_plan, frame);
-        gray_plan_parallel_target(gray_plan, frame, gray_game);
+        gray_plan_parallel_target(gray_plan, frame, gray_oriented_game());
     }
     if (error) return error;
     if (!gray) drive_counters_seed(drive_counters, frame);
@@ -253,7 +296,7 @@ esp_err_t fast_display_finish(ssd1681_handle_t d, const uint8_t *frame)
     /* The final full refresh is reserved by the lifetime cap, so preparing another fast waveform
      * can be rejected here even though cleaning succeeded. */
     ssd1681_timing_t timing = {0};
-    esp_err_t error = ssd1681_vendor_full(d, frame, SSD1681_FRAME_BYTES, &timing);
+    esp_err_t error = ssd1681_vendor_full(d, oriented(frame), SSD1681_FRAME_BYTES, &timing);
     ESP_LOGI("fast_display", "PLAYER_DISPLAY_FINISH,busy_us,%" PRId64 ",error,%d", timing.busy_us, error);
     return error;
 }
@@ -282,10 +325,11 @@ static esp_err_t gray_update(ssd1681_handle_t d, const uint8_t *frame)
     const int64_t start = esp_timer_get_time();
     bool immediate=gray_immediate;
     unsigned holds=gray_holds;
+    const uint8_t *game = gray_oriented_game();
     unsigned driven = immediate ?
-        gray_plan_parallel_prepare_pair(gray_plan, frame, gray_game, black, white,
+        gray_plan_parallel_prepare_pair(gray_plan, frame, game, black, white,
                                  gray_follow_black, gray_follow_white, holds) :
-        gray_plan_parallel_prepare(gray_plan, frame, gray_game, black, white);
+        gray_plan_parallel_prepare(gray_plan, frame, game, black, white);
     if (!gray_plan->pending && !hold_end_pending) return ESP_OK;
     ssd1681_timing_t timing = {0};
     const int64_t resume_start = esp_timer_get_time();
@@ -374,6 +418,7 @@ esp_err_t fast_display_update(ssd1681_handle_t d, const uint8_t *frame)
 {
     if (!d || !frame) return ESP_ERR_INVALID_ARG;
     if (d != owner) return ESP_ERR_INVALID_STATE;
+    frame = oriented(frame);
     if (selected == DISPLAY_GRAYSCALE) return gray_update(d, frame);
     if (!hold_end_pending && !drive_counters->pending_pixels &&
         !memcmp(previous, frame, sizeof(previous))) return ESP_OK;

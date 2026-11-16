@@ -6,6 +6,7 @@ static display_config_t current = {
     .dither_black_pulses = DITHER_PULSES_DEFAULT,
     .dither_white_pulses = DITHER_PULSES_DEFAULT,
     .border = BORDER_BLACK_LOGO,
+    .carousel_minutes = 10,
 };
 
 display_config_t display_config_get(void)

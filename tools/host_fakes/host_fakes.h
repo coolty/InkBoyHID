@@ -10,6 +10,9 @@
 
 void host_fakes_reset(void);
 
+/* esp_random() returns this value, so a test chooses the "random" game. */
+extern uint32_t host_random_value;
+
 /* Virtual clock behind esp_timer_get_time() and vTaskDelay(). Each non-zero
  * delay wakes host_delay_early_us before the requested whole-millisecond tick. */
 extern int64_t host_clock_us;

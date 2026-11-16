@@ -30,9 +30,9 @@ static int script(const char *title, const char *subtitle, const char *const *it
     assert(cursor < size);
     event_t e = events[cursor++]; assert(!strcmp(title,e.title));
     if (!strcmp(title,"SETTINGS")) {
-        assert(count == 4 && !strcmp(items[0],"DISPLAY") && !strcmp(items[1],"CONTROLLER") && !strcmp(items[2],"SOUND") && !strcmp(items[3],"FPS"));
+        assert(count == 5 && !strcmp(items[0],"DISPLAY") && !strcmp(items[1],"CONTROLLER") && !strcmp(items[2],"SOUND") && !strcmp(items[3],"FPS") && !strcmp(items[4],"CAROUSEL"));
     }
-    if (!strcmp(title,"CONTROLLER")) assert(count == 2 && !strncmp(items[0],"CONNECTION:",11) && !strcmp(items[1],"MAP BUTTONS"));
+    if (!strcmp(title,"CONTROLLER")) assert(count >= 2 && count <= 4 && !strncmp(items[0],"CONNECTION:",11) && !strcmp(items[1],"MAP BUTTONS") && (count < 3 || !strcmp(items[2],"PAIR GAMEPAD")) && (count < 4 || !strcmp(items[3],"FORGET GAMEPAD")));
     if (!strcmp(title,"CONNECTION")) assert(count == 2 && !strcmp(items[0],"BLUETOOTH") && !strcmp(items[1],"USB"));
     if (direction) *direction = e.direction;
     return e.choice;
@@ -83,6 +83,36 @@ static void failures(void) {
     push("SETTINGS",3); push("FPS",0); push("FPS",-1); push("SETTINGS",-1); finish();
     assert(fake_menu_notices==3 && display_config_get().mode==DISPLAY_DITHERED && settings_ui_sound_enabled() && !display_config_get().show_fps);
 }
+static void forget(unsigned confirm) {
+    start(); fake_ble_paired = true; fake_ble_forgets = 0;
+    push("SETTINGS",1); push("CONTROLLER",3); push("FORGET GAMEPAD",(int)confirm);
+    push("CONTROLLER",-1); push("SETTINGS",-1); finish();
+    assert(fake_ble_forgets == confirm && fake_ble_paired == !confirm && !fake_menu_notices);
+}
+static void pair(unsigned found) {
+    start(); fake_ble_found_count = found;
+    push("SETTINGS",1); push("CONTROLLER",2);
+    if (found) push("PAIR GAMEPAD",1);
+    push("CONTROLLER",-1); push("SETTINGS",-1); finish();
+    /* A pick pairs the second row (the list is strongest first) and shows one result notice. */
+    assert(fake_ble_pair_index == (found ? 1 : -1) && fake_ble_paired == (found != 0) && fake_menu_notices == 1);
+}
+static void rotation_and_carousel(void) {
+    start();
+    push("SETTINGS",0); push("DISPLAY",4); push("SCREEN ROTATION",2); push("DISPLAY",-1);   /* Rotation is the last row. */
+    push("SETTINGS",4); push("CAROUSEL",0); push("CAROUSEL",1); push("CAROUSEL",1); push("CAROUSEL",-1);
+    push("SETTINGS",-1); finish();
+    display_config_t c = display_config_get();
+    assert(c.rotation == SCREEN_ROTATE_180 && host_nvs_u8("gamepad","rotation") == 2);
+    /* The unset time shows as 10 and steps 15, then 20. */
+    assert(c.carousel && host_nvs_u8("gamepad","carousel") == 1 && c.carousel_minutes == 20 && host_nvs_u8("gamepad","carousel_min") == 20);
+    display_config_t reset = {DISPLAY_DITHERED,2,2,false,BORDER_BLACK_LOGO}; display_config_set(&reset);
+    settings_ui_load_display(); settings_ui_load_toggles();
+    assert(display_config_get().rotation == SCREEN_ROTATE_180 && display_config_get().carousel && display_config_get().carousel_minutes == 20);
+    uint8_t bad = 77; host_nvs_seed("gamepad","rotation",HOST_NVS_U8,&bad,1); host_nvs_seed("gamepad","carousel_min",HOST_NVS_U8,&bad,1);
+    display_config_set(&reset); settings_ui_load_toggles();
+    assert(display_config_get().rotation == SCREEN_ROTATE_0 && display_config_get().carousel_minutes == 0); /* Unusable values are ignored. */
+}
 static void usb_failure(void) {
     start(); fake_usb_start_error=ESP_FAIL;
     push("SETTINGS",1); push("CONTROLLER",0); push("CONNECTION",1); push("USB CONTROLLER",1);
@@ -120,11 +150,14 @@ int main(int argc,char **argv) {
     if(!strcmp(argv[1],"transport-failures")) transport_failures();
     else if(!strcmp(argv[1],"startup")) startup_validation(); else if(!strcmp(argv[1],"commit")) commit_failure();
     else if(!strcmp(argv[1],"groups")) groups(); else if(!strcmp(argv[1],"transports")) transports();
-    else if(!strcmp(argv[1],"failures")) failures(); else usb_failure();
+    else if(!strcmp(argv[1],"failures")) failures();
+    else if(!strcmp(argv[1],"forget")) forget(1); else if(!strcmp(argv[1],"forget-cancel")) forget(0);
+    else if(!strcmp(argv[1],"pair")) pair(2); else if(!strcmp(argv[1],"pair-none")) pair(0);
+    else if(!strcmp(argv[1],"rotation")) rotation_and_carousel(); else usb_failure();
     return 0;
 }
 '''
 run(CODE, modules=['settings_ui.c','preset_ui.c','controller.c','display_config.c',*PRESET_STORE_MODULES],
     fakes=['fake_menu.c','fake_input.c','fake_screen.c','fake_game_audio.c','fake_game_storage.c','fake_ble_gamepad.c','fake_usb_gamepad.c'],
-    extra_sources=[SAVE_FILE], vendor_sources=[CJSON], scenarios=[[x] for x in ['groups','transports','failures','usb-failure','startup','commit','transport-failures']])
+    extra_sources=[SAVE_FILE], vendor_sources=[CJSON], scenarios=[[x] for x in ['groups','transports','failures','usb-failure','startup','commit','transport-failures','forget','forget-cancel','pair','pair-none','rotation']])
 print('PASS: Settings groups, persisted edits, symmetrical transport/remap flow, cancellation and failed switch rollback')

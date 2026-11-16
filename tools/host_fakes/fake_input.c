@@ -16,6 +16,9 @@ void input_remap(void) { ++fake_input_remaps; }
 bool input_connected(void) { return fake_input_connected ? fake_input_connected() : true; }
 uint32_t input_report_count(void) { return 0; }
 bool input_wait_controller(void) { return fake_input_controller_ready; }
+bool input_wait_controller_or_bypass(void) { return fake_input_controller_ready; }
+bool input_bypassed(void) { return false; }
+void input_set_bypass(bool on) { (void)on; }
 void input_wait_release(void) { ++fake_input_releases; }
 
 void input_clear_events(void) { (void)input_hardware_event(); }

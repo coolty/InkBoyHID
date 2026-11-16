@@ -12,7 +12,7 @@ See [menu controls](ui-controls.md) for navigation and button mapping.
 | Group | Contents |
 | --- | --- |
 | Display | Mode, Border, Preset, Tuning; grayscale also has Transition test |
-| Controller | Connection (Bluetooth / USB), Map buttons, for either transport |
+| Controller | Connection (Bluetooth / USB), Map buttons, and Forget gamepad (Bluetooth, once a gamepad is paired) |
 | Sound | Game sound On / Off, Volume 1–10 (Left lowers, Right or A raises) |
 | FPS | Show FPS On / Off during gameplay |
 

@@ -12,9 +12,18 @@
 #include <string.h>
 
 static const char *TAG = "player";
-/* Indexed by the Game Boy button bit: A,B,Select,Start,Right,Left,Up,Down. */
-static uint8_t mapping[8];
+/* Indexed by the Game Boy button bit: A,B,Select,Start,Right,Left,Up,Down. Each entry is one controller
+ * bit. The InkBoy controller sends 8 raw bits; HID pads send the normalized controls of hid_gamepad.h,
+ * so each kind keeps its own mapping (NVS "buttons" as 8 bytes, "hid_buttons" as 8 words). */
+static uint32_t inkboy_mapping[8], hid_mapping[8];
 static nvs_handle_t settings;
+/* Set when the user chose to start a game without a controller. While set, the game does not stop for
+ * the missing controller. The Home loop clears it before every menu. */
+static _Atomic bool bypass;
+
+static bool hid_active(void) { return controller_profile() == CONTROLLER_PROFILE_HID; }
+static const uint32_t *active_mapping(void) { return hid_active() ? hid_mapping : inkboy_mapping; }
+
 static int read_pin(int pin)
 {
 #ifdef INKBOY_DIAGNOSTICS
@@ -26,7 +35,8 @@ static int read_pin(int pin)
 
 uint8_t input_buttons(void)
 {
-    uint8_t raw = controller_raw(), result = 0;
+    const uint32_t raw = controller_raw(), *mapping = active_mapping();
+    uint8_t result = 0;
     for (unsigned i = 0; i < 8; ++i) if (raw & mapping[i]) result |= 1u << i;
     return result;
 }
@@ -118,17 +128,39 @@ esp_err_t input_start_hardware_watch(void)
     return xTaskCreate(watch_buttons, "player_buttons", 2048, NULL, 2, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-bool input_connected(void) { return controller_connected(); }
+bool input_connected(void) { return controller_connected() || atomic_load(&bypass); }
+bool input_bypassed(void) { return atomic_load(&bypass); }
+void input_set_bypass(bool on) { atomic_store(&bypass, on); }
 uint32_t input_report_count(void) { return controller_reports(); }
 
 bool input_wait_controller(void)
 {
     if (controller_connected()) return true;
     const bool usb = controller_transport() == CONTROLLER_USB;
-    if (!screen_message("ON / CONNECT", usb ? "PLUG IN THE USB CONTROLLER" : "TURN ON ESP32 GAMEPAD",
+    if (!screen_message("ON / CONNECT", usb ? "PLUG IN THE USB CONTROLLER" : "TURN ON OR PAIR A GAMEPAD",
                         usb ? "CONNECTING OVER USB" : "CONNECTING AUTOMATICALLY", "HOLD PWR TO RETURN")) return false;
     while (!controller_connected()) { if ((input_hardware_event() >= INPUT_BACK)) return false;
         (void)screen_service(); vTaskDelay(pdMS_TO_TICKS(20)); }
+    return true;
+}
+
+/* Game start: wait for a controller like input_wait_controller, but a long press of BOOT (GPIO0, which
+ * the debouncer reports as INPUT_PREVIOUS) plays without one. Once chosen, later calls in the same game
+ * start return at once. A long press of PWR still returns. */
+bool input_wait_controller_or_bypass(void)
+{
+    if (controller_connected()) { atomic_store(&bypass, false); return true; }
+    if (atomic_load(&bypass)) return true;
+    const bool usb = controller_transport() == CONTROLLER_USB;
+    if (!screen_message("ON / CONNECT", usb ? "PLUG IN THE USB CONTROLLER" : "TURN ON OR PAIR A GAMEPAD",
+                        "HOLD BOOT TO PLAY WITHOUT ONE", "HOLD PWR TO RETURN")) return false;
+    while (!controller_connected()) {
+        const unsigned event = input_hardware_event();
+        if (event == INPUT_PREVIOUS) { atomic_store(&bypass, true); return true; }
+        if (event >= INPUT_BACK) return false;
+        (void)screen_service();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
     return true;
 }
 
@@ -139,15 +171,30 @@ void input_wait_release(void)
     input_clear_events();
 }
 
-bool input_mapping_valid(void)
+/* One distinct controller bit per Game Boy button. The InkBoy controller uses exactly its 8 bits. */
+static bool mapping_ok(const uint32_t m[8], bool exactly_eight_bits)
 {
-    uint8_t used = 0;
+    uint32_t used = 0;
     for (unsigned i=0;i<8;++i) {
-        uint8_t b = mapping[i];
+        uint32_t b = m[i];
         if (!b || (b & (b-1)) || (used & b)) return false;
         used |= b;
     }
-    return used == 255;
+    return !exactly_eight_bits || used == 255;
+}
+
+bool input_mapping_valid(void) { return mapping_ok(active_mapping(), !hid_active()); }
+
+static esp_err_t save_mapping(bool hid, const uint32_t m[8])
+{
+    esp_err_t error;
+    if (hid) error = nvs_set_blob(settings, "hid_buttons", m, 8 * sizeof(uint32_t));
+    else {
+        uint8_t legacy[8];
+        for (unsigned i = 0; i < 8; ++i) legacy[i] = (uint8_t)m[i];
+        error = nvs_set_blob(settings, "buttons", legacy, sizeof(legacy));
+    }
+    return error ? error : nvs_commit(settings);
 }
 
 static bool mapping_release(void)
@@ -165,57 +212,72 @@ bool input_calibrate(void)
     static const char *names[] = {"PRESS UP", "PRESS DOWN", "PRESS LEFT", "PRESS RIGHT",
                                   "PRESS A", "PRESS B", "PRESS START", "PRESS SELECT"};
     static const uint8_t order[] = {6,7,5,4,0,1,3,2};
-    uint8_t used = 0;
-    uint8_t candidate[8] = {0};
+    if (!input_wait_controller()) return false;
+    const bool hid = hid_active(); /* The kind of controller being mapped; it must stay the same throughout. */
+    uint32_t used = 0;
+    uint32_t candidate[8] = {0};
     for (unsigned step=0;step<8;++step) {
-        if (!input_wait_controller()) return false;
+        if (!input_wait_controller() || hid_active() != hid) return false;
         if (!mapping_release()) return false;
         if (!screen_prompt(names[step], "PRESS ONE CONTROLLER BUTTON")) return false;
         ESP_LOGI(TAG, "MAP_WAIT,step,%u,control,%s", step, names[step]);
         for (;;) {
-            if (!controller_connected() || (input_hardware_event() >= INPUT_BACK)) return false;
+            if (!controller_connected() || hid_active() != hid || (input_hardware_event() >= INPUT_BACK)) return false;
             if (screen_service() < 0) return false;
-            uint8_t raw = controller_raw();
+            uint32_t raw = controller_raw();
             if (raw && !(raw & (raw-1)) && !(raw & used)) {
                 candidate[order[step]] = raw;
                 used |= raw;
-                ESP_LOGI(TAG, "MAP_BUTTON,control,%s,raw,%02x", names[step], raw);
+                ESP_LOGI(TAG, "MAP_BUTTON,control,%s,raw,%02x", names[step], (unsigned)raw);
                 if (!mapping_release()) return false;
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
-    esp_err_t error = nvs_set_blob(settings, "buttons", candidate, sizeof(candidate));
-    if (!error) error = nvs_commit(settings);
+    uint32_t *current = hid ? hid_mapping : inkboy_mapping;
+    esp_err_t error = save_mapping(hid, candidate);
     if (error) {
-        (void)nvs_set_blob(settings, "buttons", mapping, sizeof(mapping));
-        (void)nvs_commit(settings);
+        (void)save_mapping(hid, current);
         screen_message("SETUP ERROR", "CANNOT SAVE BUTTON MAPPING", "PREVIOUS MAPPING KEPT", "");
         return false;
     }
-    memcpy(mapping, candidate, sizeof(mapping));
+    memcpy(current, candidate, sizeof(candidate));
     ESP_LOGI(TAG, "MAP_SAVED");
     return true;
 }
 
 void input_remap(void)
 {
-    uint8_t old_mapping[8]; memcpy(old_mapping, mapping, sizeof(mapping));
-    if (!input_calibrate()) memcpy(mapping, old_mapping, sizeof(mapping));
+    uint32_t old_inkboy[8], old_hid[8];
+    memcpy(old_inkboy, inkboy_mapping, sizeof(old_inkboy));
+    memcpy(old_hid, hid_mapping, sizeof(old_hid));
+    if (!input_calibrate()) {
+        memcpy(inkboy_mapping, old_inkboy, sizeof(old_inkboy));
+        memcpy(hid_mapping, old_hid, sizeof(old_hid));
+    }
 }
 
 void input_load_mapping(nvs_handle_t nvs)
 {
     settings = nvs;
-    size_t map_size = sizeof(mapping);
-    if (nvs_get_blob(settings, "buttons", mapping, &map_size) != ESP_OK || map_size != sizeof(mapping) || !input_mapping_valid())
-        memset(mapping, 0, sizeof(mapping));
-    if (!input_mapping_valid()) {
+    uint8_t legacy[8];
+    size_t legacy_size = sizeof(legacy);
+    memset(inkboy_mapping, 0, sizeof(inkboy_mapping));
+    if (nvs_get_blob(settings, "buttons", legacy, &legacy_size) == ESP_OK && legacy_size == sizeof(legacy))
+        for (unsigned i = 0; i < 8; ++i) inkboy_mapping[i] = legacy[i];
+    if (!mapping_ok(inkboy_mapping, true)) {
         /* Down=GPIO0, Left=1, Up=2, Right=3, Select=4, B=5, A=6, Start=7 on the
          * controller. A saved mapping wins and nothing is written here. */
         const uint8_t published_wiring[] = {0x40,0x20,0x10,0x80,0x08,0x02,0x04,0x01};
-        memcpy(mapping, published_wiring, sizeof(mapping));
+        for (unsigned i = 0; i < 8; ++i) inkboy_mapping[i] = published_wiring[i];
         ESP_LOGI(TAG, "PLAYER_MAPPING: using the published controller wiring");
     }
+    /* HID pads have no standard wiring: without a saved mapping this stays empty, which is invalid
+     * and makes the first game start run the mapping wizard. */
+    uint32_t stored[8];
+    size_t stored_size = sizeof(stored);
+    memset(hid_mapping, 0, sizeof(hid_mapping));
+    if (nvs_get_blob(settings, "hid_buttons", stored, &stored_size) == ESP_OK && stored_size == sizeof(stored) &&
+        mapping_ok(stored, false)) memcpy(hid_mapping, stored, sizeof(stored));
 }

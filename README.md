@@ -6,7 +6,7 @@ InkBoy runs Game Boy games on a Waveshare ESP32-S3 e-paper board at about 30 fps
 
 ## Planned, not implemented yet
 
-- Support for generic Bluetooth HID gamepads, beyond the custom InkBoy controller.
+- Support for generic USB HID gamepads. Generic Bluetooth gamepads already work.
 - Better USB connectivity handling, to make switching between controller use and flashing/serial easier.
 
 ## Hardware
@@ -15,9 +15,9 @@ InkBoy runs Game Boy games on a Waveshare ESP32-S3 e-paper board at about 30 fps
 | --- | --- |
 | [Waveshare ESP32-S3-ePaper-1.54 V2](https://www.waveshare.com/wiki/ESP32-S3-ePaper-1.54) | 200×200 e-paper screen, speaker and microSD slot |
 | microSD card | FAT32, for ROMs, saves and presets |
-| [InkBoy controller](https://github.com/kuslota/inkboy-controller) | Custom ESP32-C3 gamepad, connected over BLE or a USB-C data cable |
+| [InkBoy controller](https://github.com/kuslota/inkboy-controller) | Custom ESP32-C3 gamepad over BLE or a USB-C data cable, or a Bluetooth LE HID gamepad |
 
-**Only the custom InkBoy controller is currently supported.** Generic Bluetooth and USB HID gamepads are not supported.
+**Over USB, only the custom InkBoy controller is supported.** Over Bluetooth it and generic Bluetooth LE HID gamepads work. Bluetooth Classic gamepads, such as PlayStation and Switch Pro controllers, cannot connect: the ESP32-S3 has no Classic Bluetooth.
 
 ## Experimental display drive
 
@@ -48,7 +48,7 @@ Format the SD card as FAT32 and copy your ROMs into `/roms`. Power the board off
 
 Choose **Settings → Controller → Connection**:
 
-- **Bluetooth:** turn on the custom controller. InkBoy finds it automatically as `ESP32 Gamepad`.
+- **Bluetooth:** turn on the custom controller; InkBoy finds it automatically as `ESP32 Gamepad`. For another gamepad, open **Settings → Controller → Pair gamepad**, put the gamepad in pairing mode and pick it from the list with the board buttons (PWR next, BOOT select). It is remembered and reconnects by itself, and nothing else connects. The first time you start a game with it you press each button once. **Forget gamepad** removes it.
 - **USB:** connect the controller with a USB-C to USB-C **data** cable and select USB.
 
 If your button wiring differs, use **Settings → Controller → Map buttons**.
@@ -62,7 +62,7 @@ If your button wiring differs, use **Settings → Controller → Map buttons**.
 | PWR tap; hold 0.7 s | Next item; back |
 | BOOT tap; hold 0.7 s | Select; previous item |
 
-During gameplay, the controller provides the usual Game Boy buttons. Press **BOOT or PWR** to pause, save and return Home.
+During gameplay, the controller provides the usual Game Boy buttons. Press **BOOT or PWR** to pause, save and return Home. If no controller is connected when you start a game, hold **BOOT** on the connect screen to play without one; the game runs and only the board buttons work.
 
 **Each pause replaces the game's single resume checkpoint.** Continue saved restores it; manual save slots and rollback are not available. Use **Home → Power off** before removing the SD card. BOOT wakes the board.
 

@@ -29,6 +29,7 @@ esp_err_t screen_full_refresh(ssd1681_handle_t d)
         esp_err_t error = fast_display_set_dither_pulses(config.dither_black_pulses, config.dither_white_pulses);
         if (error) return error;
     }
+    fast_display_set_rotation(config.rotation);
     return fast_display_full(d, panel, config.mode);
 }
 
@@ -43,6 +44,7 @@ static ssd1681_handle_t menu_display;
 static bool menu_analog;
 static display_mode_t menu_mode;
 static uint8_t menu_dither_black, menu_dither_white;
+static screen_rotation_t menu_rotation;
 static unsigned menu_updates, menu_settling;
 static int64_t menu_last_drive;
 
@@ -69,6 +71,7 @@ bool screen_take_display(ssd1681_handle_t display, unsigned updates, bool analog
     const display_config_t config = display_config_get();
     menu_display = display; menu_mode = config.mode;
     menu_dither_black = config.dither_black_pulses; menu_dither_white = config.dither_white_pulses;
+    menu_rotation = config.rotation;
     /* Gameplay is continuous; start the menu's bounded refresh counter anew. */
     menu_updates = 0; menu_analog = analog;
     ESP_LOGI(TAG,"PLAYER_MENU_HANDOVER,game_updates,%u",updates);
@@ -96,13 +99,14 @@ bool screen_present(bool changed)
         error = ssd1681_create(&menu_display);
         if (!error) error = ssd1681_power_on(menu_display);
     }
-    bool mode_changed = menu_mode != config.mode ||
+    bool mode_changed = menu_mode != config.mode || menu_rotation != config.rotation ||
         (config.mode == DISPLAY_DITHERED && (menu_dither_black != config.dither_black_pulses || menu_dither_white != config.dither_white_pulses));
     if (!error && (initial || mode_changed)) {
         /* RAM contents and timing differ per mode, so a mode change establishes a clean reference. */
         error = screen_full_refresh(menu_display); ++menu_updates;
         menu_analog = false; menu_settling = 0; menu_mode = config.mode;
         menu_dither_black = config.dither_black_pulses; menu_dither_white = config.dither_white_pulses;
+        menu_rotation = config.rotation;
     } else if (!error) {
         error = fast_display_update(menu_display, panel); menu_updates += screen_partial_activations();
         if (!error) menu_analog = true;

@@ -115,10 +115,51 @@ static void unusable_saved_mapping_falls_back(void)
     expect_wiring(wiring);
 }
 
+/* HID pads send normalized controls (bit 0..3 D-pad, bit 3+N button N) and have no standard wiring. */
+static void hid_pad_needs_its_own_mapping(void)
+{
+    const uint8_t saved[] = {0x20, 0x10, 0x80, 0x40, 0x02, 0x04, 0x08, 0x01};
+    nvs_handle_t handle = open_settings(CONTROLLER_BLUETOOTH);
+    host_nvs_seed("gamepad", "buttons", HOST_NVS_BLOB, saved, sizeof(saved));
+    input_load_mapping(handle);
+    fake_ble_profile = BLE_GAMEPAD_HID;
+    fake_ble_raw = 1u << 17;
+    assert(controller_profile() == CONTROLLER_PROFILE_HID);
+    assert(!input_mapping_valid() && input_buttons() == 0 && host_nvs_commits == 0); /* Not guessed, not written. */
+    fake_ble_profile = BLE_GAMEPAD_INKBOY; /* The InkBoy controller keeps its own saved mapping. */
+    fake_ble_raw = 0x20;
+    assert(input_mapping_valid() && input_buttons() == A);
+}
+
+static void saved_hid_mapping_applies(void)
+{
+    /* A, B, Select, Start, Right, Left, Up, Down. */
+    const uint32_t hid[8] = {1u << 17, 1u << 16, 1u << 15, 1u << 14, 1u << 3, 1u << 2, 1u << 0, 1u << 1};
+    const uint32_t duplicate[8] = {1u << 17, 1u << 17, 1u << 15, 1u << 14, 1u << 3, 1u << 2, 1u << 0, 1u << 1};
+    nvs_handle_t handle = open_settings(CONTROLLER_BLUETOOTH);
+    host_nvs_seed("gamepad", "hid_buttons", HOST_NVS_BLOB, hid, sizeof(hid));
+    input_load_mapping(handle);
+    fake_ble_profile = BLE_GAMEPAD_HID;
+    assert(input_mapping_valid());
+    fake_ble_raw = (1u << 17) | (1u << 0) | (1u << 20); /* An unmapped button does nothing. */
+    assert(input_buttons() == (A | UP));
+    fake_ble_raw = (1u << 1) | (1u << 14);
+    assert(input_buttons() == (DOWN | START));
+    fake_ble_profile = BLE_GAMEPAD_INKBOY; /* The InkBoy controller still has the published wiring. */
+    fake_ble_raw = 0x40;
+    assert(input_buttons() == A);
+    host_nvs_seed("gamepad", "hid_buttons", HOST_NVS_BLOB, duplicate, sizeof(duplicate));
+    input_load_mapping(handle);
+    fake_ble_profile = BLE_GAMEPAD_HID;
+    assert(!input_mapping_valid()); /* A damaged blob is ignored rather than half used. */
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
-    if (!strcmp(argv[1], "default")) published_wiring_is_the_default();
+    if (!strcmp(argv[1], "hid")) hid_pad_needs_its_own_mapping();
+    else if (!strcmp(argv[1], "hid_saved")) saved_hid_mapping_applies();
+    else if (!strcmp(argv[1], "default")) published_wiring_is_the_default();
     else if (!strcmp(argv[1], "saved")) saved_mapping_wins();
     else if (!strcmp(argv[1], "fallback")) unusable_saved_mapping_falls_back();
     else if (!strcmp(argv[1], "usb")) usb_uses_the_same_mapping_and_releases_on_disconnect();
@@ -129,5 +170,5 @@ int main(int argc, char **argv)
 '''
 
 run(CODE, modules=['input.c', 'controller.c'], fakes=['fake_screen.c', 'fake_ble_gamepad.c', 'fake_usb_gamepad.c'],
-    scenarios=[[name] for name in ('default', 'saved', 'fallback', 'usb', 'wait')])
+    scenarios=[[name] for name in ('default', 'saved', 'fallback', 'usb', 'wait', 'hid', 'hid_saved')])
 print('PASS: published wiring is the default mapping; a valid saved mapping wins; unusable saved mappings fall back; USB reports use the same mapping and release on disconnect; waiting accepts either transport')

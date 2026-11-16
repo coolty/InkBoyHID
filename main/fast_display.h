@@ -4,6 +4,7 @@
 #include "gray_adaptive.h"
 #include "gray_config.h"
 #include "ssd1681_fast.h"
+#include "screen_rotate.h"
 
 #define DITHER_PULSES_DEFAULT 8u
 #define DITHER_PULSES_MAX 8u
@@ -45,6 +46,9 @@ esp_err_t fast_display_set_gray_holds(unsigned mask);
 unsigned fast_display_gray_last_scans(void);
 
 esp_err_t fast_display_set_dither_pulses(unsigned black, unsigned white);
+/* Turns everything drawn upright (menus, HUD, game) for a panel mounted otherwise. Takes effect at the
+ * next fast_display_full, which every orientation change must be followed by. */
+void fast_display_set_rotation(screen_rotation_t rotation);
 void fast_display_wait_slot(ssd1681_handle_t d, int64_t image_deadline);
 /* Nonzero while work remains: the pending pixel count, or 1 when only the
  * HOLD ending remains. Zero when settled or context invalid. */

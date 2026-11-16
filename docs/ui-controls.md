@@ -27,7 +27,7 @@ confirmation screens and mapping. Affirmative confirmations remain explicit,
 with Keep current selected first. Navigation Back/Cancel entries are not shown.
 
 Mapping builds a candidate layout and saves it only when all eight buttons are
-complete. Cancellation, disconnection or storage failure keeps the prior layout.
+complete. Cancellation, disconnection or storage failure keeps the prior layout. A generic Bluetooth gamepad has its own saved layout, and the wizard runs the first time you start a game with it. With Bluetooth selected, Controller settings has Pair gamepad, which scans for five seconds and lists the Bluetooth LE gamepads it finds (strongest first, signal in dB); choose one with the board buttons. Forget gamepad appears once one is paired and unpairs it.
 Prompts advance without a full-screen cleanup between buttons. Hold PWR to cancel.
 
 ## Saves and SD files

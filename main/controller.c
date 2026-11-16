@@ -104,6 +104,7 @@ void controller_load(nvs_handle_t nvs)
     saved = nvs_get_u8(settings, "controller", &stored) == ESP_OK && stored < CONTROLLER_TRANSPORT_COUNT
                 ? (controller_transport_t)stored : CONTROLLER_BLUETOOTH;
     active = saved;
+    ble_gamepad_load(nvs);
 }
 
 controller_transport_t controller_transport(void) { return active; }
@@ -163,20 +164,34 @@ bool controller_connected(void)
     return active == CONTROLLER_USB ? usb_gamepad_running() && atomic_load(&usb_report_seen) : ble_gamepad_connected();
 }
 
-uint8_t controller_raw(void)
+uint32_t controller_raw(void)
 {
 #ifdef INKBOY_DIAGNOSTICS
     int simulated = diagnostics_controller();
-    if (simulated >= 0) return (uint8_t)simulated;
+    if (simulated >= 0) return (uint32_t)simulated;
 #endif
     if (!controller_connected()) return 0;
     return active == CONTROLLER_USB ? atomic_load(&usb_mask) : ble_gamepad_raw();
+}
+
+controller_profile_t controller_profile(void)
+{
+    return active == CONTROLLER_BLUETOOTH && ble_gamepad_profile() == BLE_GAMEPAD_HID
+               ? CONTROLLER_PROFILE_HID : CONTROLLER_PROFILE_INKBOY;
 }
 
 uint32_t controller_reports(void)
 {
     return active == CONTROLLER_USB ? atomic_load(&usb_reports) : ble_gamepad_reports();
 }
+
+bool controller_pad_paired(void) { return ble_gamepad_paired(); }
+void controller_forget_pad(void) { ble_gamepad_forget(); }
+void controller_scan_begin(void) { ble_gamepad_scan_begin(); }
+bool controller_scan_done(unsigned *count) { return ble_gamepad_scan_done(count); }
+const char *controller_scan_name(unsigned index) { return ble_gamepad_scan_name(index); }
+int controller_scan_rssi(unsigned index) { return ble_gamepad_scan_rssi(index); }
+void controller_scan_pair(unsigned index) { ble_gamepad_pair(index); }
 
 controller_status_t controller_status(void)
 {

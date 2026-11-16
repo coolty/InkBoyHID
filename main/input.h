@@ -18,7 +18,12 @@ bool input_mapping_valid(void);
 bool input_calibrate(void);
 void input_remap(void);
 
+/* True while a controller is connected, or while the user chose to play without one. */
 bool input_connected(void);
 uint32_t input_report_count(void);
 bool input_wait_controller(void);
+/* Game start only: as input_wait_controller, plus a long press of BOOT plays without a controller. */
+bool input_wait_controller_or_bypass(void);
+bool input_bypassed(void);
+void input_set_bypass(bool on);
 void input_wait_release(void);

@@ -6,7 +6,7 @@
 
 typedef enum { CONTROLLER_BLUETOOTH, CONTROLLER_USB, CONTROLLER_TRANSPORT_COUNT } controller_transport_t;
 
-/* Loads the saved transport; an unknown stored value means Bluetooth. */
+/* Loads the saved transport; an unknown stored value means Bluetooth. Also loads the paired Bluetooth gamepad. */
 void controller_load(nvs_handle_t settings);
 controller_transport_t controller_transport(void);
 const char *controller_transport_name(controller_transport_t transport);
@@ -21,8 +21,25 @@ esp_err_t controller_select(controller_transport_t transport);
 bool controller_running(void);
 
 bool controller_connected(void);
-uint8_t controller_raw(void);
+/* Controller bits that are pressed: the 8 raw bits of the InkBoy controller, or the normalized
+ * controls of a Bluetooth HID gamepad (see hid_gamepad.h). controller_profile() says which. */
+uint32_t controller_raw(void);
+typedef enum { CONTROLLER_PROFILE_INKBOY, CONTROLLER_PROFILE_HID } controller_profile_t;
+controller_profile_t controller_profile(void);
 uint32_t controller_reports(void);
+
+/* Bluetooth pairing memory for HID gamepads. Once one is paired no other gamepad is accepted until
+ * it is forgotten. The InkBoy controller is never part of this. */
+bool controller_pad_paired(void);
+void controller_forget_pad(void);
+/* Pairing menu: scan (about five seconds, poll controller_scan_done), then pair one result. Pairing is
+ * complete when controller_pad_paired() turns true. */
+#define CONTROLLER_SCAN_MAX 8u
+void controller_scan_begin(void);
+bool controller_scan_done(unsigned *count);
+const char *controller_scan_name(unsigned index);
+int controller_scan_rssi(unsigned index);
+void controller_scan_pair(unsigned index);
 
 /* Startup serial bypass and runtime USB controller/serial toggle. Neither saves NVS. */
 void controller_request_console(void);

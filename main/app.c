@@ -65,6 +65,8 @@ static void run_player(void)
     input_wait_release();
     unsigned selected = 0;
     while (!screen_failed()) {
+        input_set_bypass(false); /* Playing without a controller is chosen per game start. */
+        game_session_stop_carousel(); /* The carousel only runs from its entry in the Games list. */
         const char *items[] = {"RESUME GAME", "GAMES", "SETTINGS", "POWER OFF"};
         const char *no_game[] = {"GAMES","SETTINGS","POWER OFF"};
         const bool game_ready = game_session_ready();
@@ -77,12 +79,20 @@ static void run_player(void)
         else if (choice == 1) play = game_session_select();
         else if (choice == 2) settings_ui_open();
         else if (choice == 3) power_off();
-        if (play && !screen_failed() && input_wait_controller()) {
-            if (!screen_close()) break;
-            input_wait_release(); input_clear_events();
-            (void)game_session_play();
-            if (screen_failed()) break;
-            game_session_ensure_saved();
+        if (play && !screen_failed() && input_wait_controller_or_bypass()) {
+            /* Resume has no mapping check of its own, and a different pad may be connected now. */
+            if (!input_mapping_valid() && !input_bypassed() && !input_calibrate()) continue;
+            /* One pass normally; the random carousel loops, saving each game and starting the next. */
+            bool stopped = false;
+            for (;;) {
+                if (!screen_close()) { stopped = true; break; }
+                input_wait_release(); input_clear_events();
+                const unsigned reason = game_session_play();
+                if (screen_failed()) { stopped = true; break; }
+                game_session_ensure_saved();
+                if (reason != GAME_SESSION_CAROUSEL || !game_session_start_random()) break;
+            }
+            if (stopped) break;
             selected = 0;
         }
     }

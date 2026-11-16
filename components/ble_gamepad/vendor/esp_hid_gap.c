@@ -413,8 +413,15 @@ static void handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst)
                                                scan_rst->adv_data_len + scan_rst->scan_rsp_len,
                                                ESP_BLE_AD_TYPE_16SRV_CMPL,
                                                &uuid_len);
-    if (uuid_d != NULL && uuid_len) {
-        uuid = uuid_d[0] + (uuid_d[1] << 8);
+    /* InkBoy: the stock example only reads the first UUID of the complete list. Gamepads often list
+     * the HID service after the battery service, or in the partial list, so check both lists fully. */
+    for (unsigned list = 0; list < 2 && uuid != ESP_GATT_UUID_HID_SVC; ++list) {
+        if (list) uuid_d = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                               scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                               ESP_BLE_AD_TYPE_16SRV_PART,
+                                               &uuid_len);
+        for (unsigned i = 0; uuid_d != NULL && i + 1 < uuid_len; i += 2)
+            if ((uuid_d[i] | (uuid_d[i + 1] << 8)) == ESP_GATT_UUID_HID_SVC) uuid = ESP_GATT_UUID_HID_SVC;
     }
 
     uint8_t appearance_len = 0;

@@ -14,6 +14,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -34,6 +35,8 @@ static uint32_t current_rom_crc;
 static SemaphoreHandle_t core_lock;
 static _Atomic bool paused = true;
 static uint32_t emulated_frames;
+static bool carousel_on;
+static int64_t carousel_us;
 static size_t save_size;
 /* The writer owns this buffer while a save is in flight.  The emulator task
  * only touches it while holding core_lock, then SD I/O runs without that lock. */
@@ -293,6 +296,8 @@ unsigned game_session_play(void)
     while (error == ESP_OK && !screen_failed()) {
         if (input_hardware_event()) { reason = 1; break; }
         if (!input_connected()) { reason = 3; break; }
+        /* Random carousel: after the set time of play, hand over so the next game can start. */
+        if (carousel_on && esp_timer_get_time() - started >= carousel_us) { reason = GAME_SESSION_CAROUSEL; break; }
         /* Pace electrical work before sampling, so a waiting drive never holds
          * an unnecessarily old snapshot. */
         fast_display_wait_slot(d, next_image);
@@ -450,6 +455,36 @@ static bool load_game(const game_entry_t *entry)
     return true;
 }
 
+bool game_session_carousel_active(void) { return carousel_on; }
+void game_session_stop_carousel(void) { carousel_on = false; }
+
+bool game_session_start_random(void)
+{
+    carousel_on = false;
+    size_t count = 0; bool truncated = false;
+    esp_err_t error = game_storage_list(games, GAME_CATALOG_MAX, &count, &truncated);
+    if (error || !count) {
+        menu_notice(error ? "CARD ERROR" : "NO GAMES", "PUT GB FILES IN CARD /ROMS", "POWER OFF BEFORE REMOVING CARD");
+        return false;
+    }
+    /* Never the game just played, unless it is the only one. */
+    size_t skip = count, candidates = count;
+    if (count > 1 && game_ready)
+        for (size_t i = 0; i < count; ++i)
+            if (!strcmp(current_game.name, games[i].name)) { skip = i; --candidates; break; }
+    size_t pick = (size_t)(esp_random() % candidates);
+    if (pick >= skip) ++pick;
+    if (!load_game(&games[pick])) return false;
+    bool exists = false;
+    if (game_storage_has_state(&current_game, current_rom_crc, current_rom_size, gb_emulator_state_size(), &exists) == ESP_OK && exists)
+        (void)game_session_load_checkpoint();
+    const unsigned configured = display_config_get().carousel_minutes, minutes = configured ? configured : 10u;
+    carousel_us = (int64_t)minutes * 60000000LL;
+    carousel_on = true;
+    ESP_LOGI(TAG, "PLAYER_CAROUSEL,game,%s,minutes,%u", current_game.name, minutes);
+    return true;
+}
+
 bool game_session_select(void)
 {
     size_t count = 0; bool truncated = false;
@@ -458,18 +493,23 @@ bool game_session_select(void)
         menu_notice(error ? "CARD ERROR" : "NO GAMES", "PUT GB FILES IN CARD /ROMS", "POWER OFF BEFORE REMOVING CARD");
         return false;
     }
-    const char *items[GAME_CATALOG_MAX + 1];
+    /* With the random carousel enabled, "START RANDOM GAME" is the first visible row. */
+    const bool random_entry = display_config_get().carousel;
+    const unsigned first = random_entry ? 2u : 1u;
+    const char *items[GAME_CATALOG_MAX + 2];
     items[0] = MENU_BACK;
-    for (size_t i = 0; i < count; ++i) items[i + 1] = games[i].name;
-    unsigned selected = 1;
+    if (random_entry) items[1] = "START RANDOM GAME";
+    for (size_t i = 0; i < count; ++i) items[i + first] = games[i].name;
+    unsigned selected = first;
     for (size_t i = 0; i < count; ++i)
-        if (!strcmp(current_game.name, games[i].name)) selected = (unsigned)i + 1;
+        if (!strcmp(current_game.name, games[i].name)) selected = (unsigned)i + first;
     for (;;) {
-        int choice = menu_choose("GAMES", truncated ? "FIRST 64 FILES /ROMS" : "SD CARD /ROMS", items, count + 1, &selected, NULL);
+        int choice = menu_choose("GAMES", truncated ? "FIRST 64 FILES /ROMS" : "SD CARD /ROMS", items, count + first, &selected, NULL);
         if (choice <= 0) return false;
-        if (!input_wait_controller()) return false;
-        if (!input_mapping_valid() && !input_calibrate()) return false;
-        if (load_game(&games[choice - 1])) {
+        if (!input_wait_controller_or_bypass()) return false;
+        if (!input_mapping_valid() && !input_bypassed() && !input_calibrate()) return false;
+        if (random_entry && choice == 1) return game_session_start_random();
+        if (load_game(&games[choice - first])) {
             bool exists = false;
             error = game_storage_has_state(&current_game, current_rom_crc,
                 current_rom_size, gb_emulator_state_size(), &exists);

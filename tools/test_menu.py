@@ -50,6 +50,7 @@ unsigned fast_display_gray_last_scans(void) { return 1; }
 unsigned fast_display_pending(ssd1681_handle_t d) { (void)d; return pending; }
 void fast_display_wait_slot(ssd1681_handle_t d, int64_t image_deadline) { (void)d; (void)image_deadline; }
 esp_err_t fast_display_set_dither_pulses(unsigned black, unsigned white) { (void)black; (void)white; return ESP_OK; }
+void fast_display_set_rotation(screen_rotation_t rotation) { (void)rotation; }
 
 esp_err_t fast_display_full(ssd1681_handle_t d, const uint8_t *frame, display_mode_t mode)
 {
