@@ -1,4 +1,4 @@
-# InkBoy
+# InkBoy (enhancements in this repo were added with the help of Claude)
 
 InkBoy runs Game Boy games on a Waveshare ESP32-S3 e-paper board at about 30 fps. Choose fast dithered black and white or four-shade grayscale. It includes an SD ROM browser, speaker audio, automatic resume, tunable display presets and an optional FPS counter.
 
